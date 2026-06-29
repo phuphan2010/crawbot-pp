@@ -97,9 +97,35 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
         except Exception:
             pass
 
-        # Post text: span[dir="auto"][lang] wraps the entire post body including all paragraphs.
-        # This is far more specific than div[dir="auto"] which appears all over the page.
-        text = await _get_text(post_el, 'span[dir="auto"][lang]')
+        # Extract post body text while excluding comment text.
+        #
+        # Key: comment action bars are <ul> elements containing <a href*="comment_id">.
+        # Each comment's text span lives in the same container as one such <ul>.
+        # Post body text spans do NOT share a container with these <ul>s.
+        _JS_EXTRACT_TEXT = (
+            "(postEl) => {"
+            "  const sel = \"span[dir='auto'][lang]\";"
+            "  const allSpans = [...postEl.querySelectorAll(sel)];"
+            "  if (!allSpans.length) return '';"
+            "  const commentSpans = new Set();"
+            "  for (const ul of postEl.querySelectorAll('ul')) {"
+            "    if (!ul.querySelector('a[href*=\"comment_id\"]')) continue;"
+            "    let node = ul.parentElement;"
+            "    for (let i = 0; i < 6; i++) {"
+            "      if (!node || node === postEl) break;"
+            "      const spans = [...node.querySelectorAll(sel)];"
+            "      if (spans.length === 1) { commentSpans.add(spans[0]); break; }"
+            "      node = node.parentElement;"
+            "    }"
+            "  }"
+            "  return allSpans"
+            "    .filter(s => !commentSpans.has(s))"
+            "    .map(s => s.innerText.trim())"
+            "    .filter(Boolean)"
+            "    .join('\\n\\n');"
+            "}"
+        )
+        text = await post_el.evaluate(_JS_EXTRACT_TEXT)
 
         # Image URLs — scontent*.fbcdn.net are user-uploaded images; static.xx.fbcdn.net are icons.
         image_urls: List[str] = []
