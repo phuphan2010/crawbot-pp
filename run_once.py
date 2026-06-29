@@ -1,6 +1,9 @@
 """
-Single-run entry point. Called by Windows Task Scheduler or manually.
-Usage: python run_once.py
+Single-run entry point. Called by cron or manually.
+
+Usage:
+  python run_once.py                  # dùng HEADLESS setting trong .env
+  xvfb-run -a python run_once.py     # chạy headful trên server không có display (lần đầu login)
 """
 import asyncio
 import sys
@@ -24,9 +27,7 @@ async def main() -> int:
     browser = BrowserManager()
     use_cookies = settings.COOKIE_PATH.exists()
 
-    # First run or expired cookies → headful for login
-    headless = use_cookies
-    await browser.start(headless=headless)
+    await browser.start(headless=settings.HEADLESS, channel=settings.BROWSER_CHANNEL)
 
     ctx = await browser.new_context(cookie_path=settings.COOKIE_PATH if use_cookies else None)
     page = await ctx.new_page()

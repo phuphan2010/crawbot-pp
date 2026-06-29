@@ -22,5 +22,10 @@ SCROLL_PAUSE_MAX_MS: int = int(os.getenv("SCROLL_PAUSE_MAX_MS", "5000"))
 RUN_TIME: str = os.getenv("RUN_TIME", "08:00")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+# HEADLESS=true  → chạy headless (cần xvfb-run nếu false trên server không có display)
+# BROWSER_CHANNEL → để trống dùng Playwright bundled Chromium; hoặc "chrome" nếu cài Google Chrome
+HEADLESS: bool = os.getenv("HEADLESS", "false").lower() == "true"
+BROWSER_CHANNEL: str | None = os.getenv("BROWSER_CHANNEL") or None
+
 SHEET_HEADER = ["scraped_at", "author", "date", "text", "image_urls", "video_urls", "post_url"]
 POST_URL_COLUMN_INDEX = 7  # column G (1-based)

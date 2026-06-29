@@ -6,9 +6,9 @@ from loguru import logger
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
 
-# Realistic Chrome user-agent (update if needed)
+# Linux Chrome user-agent — keeps fingerprint consistent with headless Chromium on Linux
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
@@ -25,18 +25,23 @@ class BrowserManager:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
 
-    async def start(self, headless: bool = False) -> None:
+    async def start(self, headless: bool = False, channel: str | None = None) -> None:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            channel="chrome",
+        launch_kwargs: dict = dict(
             headless=headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
+                "--disable-dev-shm-usage",   # required on Linux with limited /dev/shm
+                "--disable-gpu",
             ],
         )
-        logger.info(f"Browser launched (headless={headless})")
+        if channel:
+            launch_kwargs["channel"] = channel
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        label = f"channel={channel}" if channel else "bundled Chromium"
+        logger.info(f"Browser launched ({label}, headless={headless})")
 
     async def new_context(self, cookie_path: Path | None = None) -> BrowserContext:
         viewport = random.choice(VIEWPORTS)
