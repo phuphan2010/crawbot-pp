@@ -41,14 +41,34 @@ async def _get_all_attrs(el: ElementHandle, selector: str, attr: str) -> List[st
         return []
 
 
+_debug_dumped = False  # dump HTML of only the first post per run
+
+
 async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
     """Parse a single Facebook post element into a Post dataclass."""
+    global _debug_dumped
     try:
-        # Author name: typically in a link near the top of the post
-        author = await _get_text(post_el, 'h2 a, [data-testid="post_author"] a, strong a')
-        if not author:
-            # Fallback: find the first strong tag
-            author = await _get_text(post_el, "strong")
+        if not _debug_dumped:
+            html = await post_el.inner_html()
+            from pathlib import Path
+            Path("logs/debug").mkdir(parents=True, exist_ok=True)
+            Path("logs/debug/post_sample.html").write_text(html, encoding="utf-8")
+            _debug_dumped = True
+            logger.info("Debug HTML saved to logs/debug/post_sample.html")
+
+        # Author name — try a cascade of selectors; modern FB often uses h2 > span > a
+        author = ""
+        for author_sel in [
+            'h2 a',
+            'h3 a',
+            '[data-testid="post_author"] a',
+            'strong a',
+            'strong',
+            'h2 span',
+        ]:
+            author = await _get_text(post_el, author_sel)
+            if author and len(author) < 100:  # Skip if it grabbed too much text
+                break
 
         # Find the timestamp link — its inner text is a relative-time string ("31m", "2h", …).
         # Using query_selector_all + filter avoids picking up post-body links whose visible
@@ -119,15 +139,16 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
             except Exception:
                 pass
 
-        # Image URLs — check both src and data-src (lazy-loaded images)
+        # Image URLs — check both src and data-src (lazy-loaded images).
+        # Only keep scontent*.fbcdn.net URLs — these are actual user-uploaded images.
+        # static.xx.fbcdn.net/rsrc.php/... are UI icons and must be excluded.
         image_urls: List[str] = []
         img_tags = await post_el.query_selector_all("img")
         for img in img_tags:
             src = await img.get_attribute("src") or ""
             if not src:
                 src = await img.get_attribute("data-src") or ""
-            # fbcdn.net covers all Facebook CDN domains; skip emoji/icon URLs
-            if src and "fbcdn.net" in src and "emoji" not in src.lower():
+            if src and "scontent" in src and "fbcdn.net" in src and "emoji" not in src.lower():
                 image_urls.append(src)
 
         # Video URLs — look for video source or data-video-id
