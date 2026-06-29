@@ -1,3 +1,4 @@
+import asyncio
 import time
 from pathlib import Path
 
@@ -32,24 +33,63 @@ async def _do_login(page: Page, email: str, password: str) -> None:
     logger.info("Starting Facebook login flow...")
     await page.goto("https://www.facebook.com/login", timeout=30000)
     await page.wait_for_load_state("domcontentloaded")
+    await asyncio.sleep(1)
 
-    await page.fill('[name="email"]', email)
-    await page.fill('[name="pass"]', password)
-    await page.click('[name="login"]')
+    # Use type() not fill() — simulates real keystrokes so React's onChange fires
+    email_field = page.locator('[name="email"]')
+    await email_field.click()
+    await email_field.type(email, delay=40)
 
-    # Wait for redirect away from /login
+    pass_field = page.locator('[name="pass"]')
+    await pass_field.click()
+    await pass_field.type(password, delay=40)
+    await asyncio.sleep(0.5)
+
+    # Click login button — Playwright will timeout waiting for FB's redirect chain,
+    # but the click still happens; we catch the error and wait separately
     try:
-        await page.wait_for_url(lambda url: "/login" not in url, timeout=30000)
+        await page.locator('[name="login"]').click(timeout=8000)
     except Exception:
         pass
 
-    # Handle 2FA or checkpoint — pause for manual intervention
-    if "/checkpoint" in page.url or "/login" in page.url:
-        logger.warning("Facebook requires additional verification (2FA / checkpoint).")
-        logger.warning("Please complete verification in the browser window, then press ENTER here...")
-        input("Press ENTER after completing verification: ")
+    # Wait until we leave /login regardless of how many redirects FB does
+    try:
+        await page.wait_for_url(
+            lambda url: "facebook.com" in url and "/login" not in url,
+            timeout=60000,
+        )
+    except Exception:
+        pass
 
-    logger.info(f"Login complete. Current URL: {page.url}")
+    # Handle any verification pages in a loop (2FA, "Remember browser?", checkpoint)
+    for _ in range(5):
+        url = page.url
+        logger.info(f"Current URL: {url}")
+
+        if "remember_browser" in url:
+            for btn_text in ["OK", "Continue", "Not now"]:
+                try:
+                    btn = page.get_by_role("button", name=btn_text)
+                    if await btn.is_visible(timeout=2000):
+                        await btn.click()
+                        await asyncio.sleep(2)
+                        break
+                except Exception:
+                    pass
+        elif "two_factor" in url or "two_step" in url or "checkpoint" in url:
+            logger.warning("Facebook requires manual action (2FA / checkpoint).")
+            logger.warning("Complete the steps in the browser window, then press ENTER here...")
+            input("Press ENTER to continue: ")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+        else:
+            break
+
+        await asyncio.sleep(1)
+
+    logger.info(f"Login flow done. Final URL: {page.url}")
 
 
 async def ensure_session(ctx: BrowserContext, page: Page) -> None:
