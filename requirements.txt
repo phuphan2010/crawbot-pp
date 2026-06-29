@@ -1,0 +1,7 @@
+playwright
+gspread
+google-auth
+google-auth-oauthlib
+python-dotenv
+schedule
+loguru

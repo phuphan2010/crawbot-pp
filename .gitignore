@@ -1,0 +1,9 @@
+.env
+cookies/
+config/service_account.json
+logs/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.playwright/
