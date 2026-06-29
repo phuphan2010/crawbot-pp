@@ -83,12 +83,12 @@ async def scrape_group(page: Page, group_url: str) -> List[Post]:
     found_selector = None
     for selector in POST_SELECTORS:
         try:
-            await page.wait_for_selector(selector, timeout=20000)
+            await page.wait_for_selector(selector, timeout=5000)
             found_selector = selector
             logger.info(f"Feed ready (matched '{selector}')")
             break
         except Exception:
-            pass
+            continue
 
     if not found_selector:
         await save_debug_screenshot(page, "no_posts_found")
@@ -102,9 +102,23 @@ async def scrape_group(page: Page, group_url: str) -> List[Post]:
     stall_count = 0
     max_stall = 3
 
+    _dumped = False
+
     for scroll_num in range(1, settings.MAX_SCROLLS + 1):
         # Collect post elements using the selector that matched at load time
         post_elements = await page.query_selector_all(found_selector)
+        if scroll_num == 1:
+            logger.info(f"Scroll 1: {len(post_elements)} raw elements found by '{found_selector}'")
+
+        # On first scroll, dump HTML of first 3 elements for selector debugging
+        if scroll_num == 1 and not _dumped and post_elements:
+            from pathlib import Path
+            Path("logs/debug").mkdir(parents=True, exist_ok=True)
+            for i, el in enumerate(post_elements[:3]):
+                html = await el.inner_html()
+                Path(f"logs/debug/article_{i}.html").write_text(html[:3000], encoding="utf-8")
+            logger.info("Saved logs/debug/article_0..2.html for inspection")
+            _dumped = True
 
         new_this_scroll = 0
         for el in post_elements:
