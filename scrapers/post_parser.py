@@ -8,6 +8,9 @@ from playwright.async_api import ElementHandle, Page
 from models.post import Post
 from utils.helpers import extract_post_id
 
+# Matches Facebook relative-time strings like "31m", "2h", "1d", "1w", "Just now"
+_RELATIVE_TIME_RE = re.compile(r'^\d+[smhdw]$|^just\s*now$', re.I)
+
 
 async def _get_text(el: ElementHandle, selector: str, default: str = "") -> str:
     try:
@@ -47,18 +50,36 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
             # Fallback: find the first strong tag
             author = await _get_text(post_el, "strong")
 
-        # Post timestamp link — href contains the canonical post URL
-        timestamp_link = await post_el.query_selector('a[href*="/posts/"], a[href*="story_fbid"], a[href*="/permalink/"]')
+        # Find the timestamp link — its inner text is a relative-time string ("31m", "2h", …).
+        # Using query_selector_all + filter avoids picking up post-body links whose visible
+        # text is a full URL or long sentence.
         post_url = ""
         date_text = ""
-        if timestamp_link:
-            post_url = await timestamp_link.get_attribute("href") or ""
-            # Make absolute
-            if post_url.startswith("/"):
-                post_url = "https://www.facebook.com" + post_url
-            # Remove tracking params
-            post_url = post_url.split("?")[0]
-            date_text = (await timestamp_link.inner_text()).strip()
+        for sel in ['a[href*="/posts/"]', 'a[href*="story_fbid"]', 'a[href*="/permalink/"]']:
+            links = await post_el.query_selector_all(sel)
+            for link in links:
+                txt = (await link.inner_text()).strip()
+                if _RELATIVE_TIME_RE.match(txt):
+                    href = (await link.get_attribute("href")) or ""
+                    if href.startswith("/"):
+                        href = "https://www.facebook.com" + href
+                    post_url = href.split("?")[0]
+                    date_text = txt
+                    break
+            if post_url:
+                break
+
+        # Fallback: take first matching link even without a recognised time string
+        if not post_url:
+            link = await post_el.query_selector(
+                'a[href*="/posts/"], a[href*="story_fbid"], a[href*="/permalink/"]'
+            )
+            if link:
+                href = (await link.get_attribute("href")) or ""
+                if href.startswith("/"):
+                    href = "https://www.facebook.com" + href
+                post_url = href.split("?")[0]
+                date_text = (await link.inner_text()).strip()
 
         post_id = extract_post_id(post_url) if post_url else ""
 
@@ -91,20 +112,22 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
                 candidates = []
                 for n in nodes:
                     t = (await n.inner_text()).strip()
-                    if len(t) > 30:
+                    if len(t) > 10:
                         candidates.append(t)
                 if candidates:
                     text = max(candidates, key=len)
             except Exception:
                 pass
 
-        # Image URLs
+        # Image URLs — check both src and data-src (lazy-loaded images)
         image_urls: List[str] = []
-        img_tags = await post_el.query_selector_all("img[src]")
+        img_tags = await post_el.query_selector_all("img")
         for img in img_tags:
             src = await img.get_attribute("src") or ""
-            # Filter out profile pictures and icons (they tend to be small/cached URLs)
-            if src and "scontent" in src and "emoji" not in src.lower():
+            if not src:
+                src = await img.get_attribute("data-src") or ""
+            # fbcdn.net covers all Facebook CDN domains; skip emoji/icon URLs
+            if src and "fbcdn.net" in src and "emoji" not in src.lower():
                 image_urls.append(src)
 
         # Video URLs — look for video source or data-video-id

@@ -30,16 +30,18 @@ def _is_today_post(date_text: str) -> bool:
     dt = date_text.lower().strip()
     if not dt or dt == "just now":
         return True
-    m = re.match(r'^(\d+)([smhd])$', dt)
+    m = re.match(r'^(\d+)([smhdw])$', dt)
     if not m:
-        return True  # Unknown format — keep it
+        return True  # Unknown format (e.g. "June 10") — keep it
     value, unit = int(m.group(1)), m.group(2)
-    deltas = {"s": timedelta(seconds=value), "m": timedelta(minutes=value),
-              "h": timedelta(hours=value), "d": timedelta(days=value)}
-    delta = deltas.get(unit)
-    if delta is None:
-        return True
-    return (now - delta).date() == today
+    deltas = {
+        "s": timedelta(seconds=value),
+        "m": timedelta(minutes=value),
+        "h": timedelta(hours=value),
+        "d": timedelta(days=value),
+        "w": timedelta(weeks=value),
+    }
+    return (now - deltas[unit]).date() == today
 
 
 async def _detect_issues(page: Page) -> str | None:
