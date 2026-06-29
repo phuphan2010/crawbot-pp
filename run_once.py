@@ -59,7 +59,7 @@ async def main() -> int:
         added = append_posts(ws, all_posts)
         logger.info(f"=== Run complete: {added} new posts added to sheet ===")
     except Exception as exc:
-        logger.error(f"Google Sheets write failed: {exc}")
+        logger.exception(f"Google Sheets write failed: {exc}")
         return 1
 
     return 0
