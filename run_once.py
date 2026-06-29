@@ -7,6 +7,7 @@ Usage:
 """
 import asyncio
 import sys
+from datetime import date
 
 from loguru import logger
 
@@ -17,7 +18,7 @@ from scrapers.group_scraper import scrape_group
 from sheets.client import open_worksheet
 from sheets.writer import append_posts
 from utils.logger import setup_logger
-from utils.helpers import async_random_delay
+from utils.helpers import async_random_delay, group_name_from_url
 
 
 async def main() -> int:
@@ -39,30 +40,33 @@ async def main() -> int:
         await browser.close()
         return 1
 
-    all_posts = []
+    today = date.today().isoformat()  # e.g. "2026-06-29"
+    total_added = 0
+    errors = 0
+
     for group_url in settings.GROUP_URLS:
         posts = await scrape_group(page, group_url)
-        all_posts.extend(posts)
         if len(settings.GROUP_URLS) > 1:
             await async_random_delay(1000, 3000)
 
+        if not posts:
+            logger.warning(f"No posts collected from {group_url}")
+            continue
+
+        sheet_name = f"{group_name_from_url(group_url)}_{today}"
+        try:
+            ws = open_worksheet(settings.SERVICE_ACCOUNT_JSON, settings.SHEET_ID, sheet_name)
+            added = append_posts(ws, posts)
+            logger.info(f"Sheet '{sheet_name}': {added} new posts added")
+            total_added += added
+        except Exception as exc:
+            logger.exception(f"Google Sheets write failed for '{sheet_name}': {exc}")
+            errors += 1
+
     await browser.close()
 
-    if not all_posts:
-        logger.warning("No posts collected. Nothing to write.")
-        return 0
-
-    logger.info(f"Total posts collected across all groups: {len(all_posts)}")
-
-    try:
-        ws = open_worksheet(settings.SERVICE_ACCOUNT_JSON, settings.SHEET_ID, settings.WORKSHEET_NAME)
-        added = append_posts(ws, all_posts)
-        logger.info(f"=== Run complete: {added} new posts added to sheet ===")
-    except Exception as exc:
-        logger.exception(f"Google Sheets write failed: {exc}")
-        return 1
-
-    return 0
+    logger.info(f"=== Run complete: {total_added} new posts added across all groups ===")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

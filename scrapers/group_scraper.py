@@ -1,4 +1,6 @@
 import random
+import re
+from datetime import datetime, timedelta
 from typing import List
 
 from loguru import logger
@@ -19,6 +21,25 @@ POST_SELECTORS = [
 ]
 
 CHECKPOINT_PATTERNS = ["/checkpoint/", "/login/", "sorry"]
+
+
+def _is_today_post(date_text: str) -> bool:
+    """Return True if the relative date string indicates a post from today."""
+    now = datetime.now()
+    today = now.date()
+    dt = date_text.lower().strip()
+    if not dt or dt == "just now":
+        return True
+    m = re.match(r'^(\d+)([smhd])$', dt)
+    if not m:
+        return True  # Unknown format — keep it
+    value, unit = int(m.group(1)), m.group(2)
+    deltas = {"s": timedelta(seconds=value), "m": timedelta(minutes=value),
+              "h": timedelta(hours=value), "d": timedelta(days=value)}
+    delta = deltas.get(unit)
+    if delta is None:
+        return True
+    return (now - delta).date() == today
 
 
 async def _detect_issues(page: Page) -> str | None:
@@ -101,5 +122,9 @@ async def scrape_group(page: Page, group_url: str) -> List[Post]:
             logger.error(issue)
             break
 
-    logger.info(f"Finished scraping {group_url}: {len(all_posts)} unique posts collected")
-    return all_posts
+    today_posts = [p for p in all_posts if _is_today_post(p.date)]
+    logger.info(
+        f"Finished scraping {group_url}: {len(today_posts)} today's posts "
+        f"(filtered from {len(all_posts)} total)"
+    )
+    return today_posts

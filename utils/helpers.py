@@ -9,6 +9,15 @@ from urllib.parse import urlparse, parse_qs
 from loguru import logger
 
 
+def group_name_from_url(group_url: str) -> str:
+    """Extract group slug from a Facebook group URL for use as a sheet name."""
+    m = re.search(r"/groups/([^/?#]+)", group_url)
+    slug = m.group(1) if m else re.sub(r"[^\w]", "_", group_url)[-30:]
+    # Sanitise: Sheets tab names cannot contain [ ] : * ? / \
+    slug = re.sub(r'[\[\]:*?/\\]', "_", slug)
+    return slug[:80]  # Sheets max tab name length is 100; leave room for date
+
+
 def extract_post_id(url: str) -> str:
     """Extract a stable post identifier from a Facebook post URL."""
     url = url.split("?")[0].rstrip("/")

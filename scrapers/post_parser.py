@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import List
 
@@ -61,17 +62,41 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
 
         post_id = extract_post_id(post_url) if post_url else ""
 
-        # Post text content — look for the main text container
+        # Expand "See more" / "Xem thêm" so full text is in DOM
+        try:
+            buttons = await post_el.query_selector_all('[role="button"]')
+            for btn in buttons:
+                btn_text = (await btn.inner_text()).strip().lower()
+                if btn_text in ("see more", "xem thêm"):
+                    await btn.click()
+                    await asyncio.sleep(0.3)
+                    break
+        except Exception:
+            pass
+
+        # Post text content — try specific data attributes, then longest div[dir="auto"] block
         text = ""
         for selector in [
             '[data-ad-comet-preview="message"]',
             '[data-testid="post_message"]',
-            'div[dir="auto"] > span',
-            'div[class*="userContent"]',
+            '[data-ad-preview="message"]',
         ]:
             text = await _get_text(post_el, selector)
             if text:
                 break
+
+        if not text:
+            try:
+                nodes = await post_el.query_selector_all('div[dir="auto"]')
+                candidates = []
+                for n in nodes:
+                    t = (await n.inner_text()).strip()
+                    if len(t) > 30:
+                        candidates.append(t)
+                if candidates:
+                    text = max(candidates, key=len)
+            except Exception:
+                pass
 
         # Image URLs
         image_urls: List[str] = []
