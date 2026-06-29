@@ -68,9 +68,6 @@ async def scrape_group(page: Page, group_url: str) -> List[Post]:
         logger.error(issue)
         return []
 
-    # Small pause after page load
-    await async_random_delay(2000, 4000)
-
     # Dismiss any cookie/notification dialogs
     for dismiss_selector in ['[aria-label="Close"]', '[data-testid="cookie-policy-dialog-accept-button"]']:
         try:
@@ -81,18 +78,33 @@ async def scrape_group(page: Page, group_url: str) -> List[Post]:
         except Exception:
             pass
 
+    # Wait for at least one post container to appear (replaces fixed delay).
+    # Facebook renders feed via React — domcontentloaded fires before posts are in DOM.
+    found_selector = None
+    for selector in POST_SELECTORS:
+        try:
+            await page.wait_for_selector(selector, timeout=20000)
+            found_selector = selector
+            logger.info(f"Feed ready (matched '{selector}')")
+            break
+        except Exception:
+            pass
+
+    if not found_selector:
+        await save_debug_screenshot(page, "no_posts_found")
+        logger.error("No post containers appeared within 20s — check debug screenshot")
+        return []
+
+    await async_random_delay(1000, 2000)
+
     all_posts: List[Post] = []
     seen_ids: set[str] = set()
     stall_count = 0
     max_stall = 3
 
     for scroll_num in range(1, settings.MAX_SCROLLS + 1):
-        # Collect post elements
-        post_elements = []
-        for selector in POST_SELECTORS:
-            post_elements = await page.query_selector_all(selector)
-            if post_elements:
-                break
+        # Collect post elements using the selector that matched at load time
+        post_elements = await page.query_selector_all(found_selector)
 
         new_this_scroll = 0
         for el in post_elements:
