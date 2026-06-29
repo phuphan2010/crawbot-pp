@@ -41,46 +41,25 @@ async def _get_all_attrs(el: ElementHandle, selector: str, attr: str) -> List[st
         return []
 
 
-_debug_dumped = False  # dump HTML of only the first post per run
-
-
 async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
     """Parse a single Facebook post element into a Post dataclass."""
-    global _debug_dumped
     try:
-        if not _debug_dumped:
-            html = await post_el.inner_html()
-            from pathlib import Path
-            Path("logs/debug").mkdir(parents=True, exist_ok=True)
-            Path("logs/debug/post_sample.html").write_text(html, encoding="utf-8")
-            _debug_dumped = True
-            logger.info("Debug HTML saved to logs/debug/post_sample.html")
+        # Author: modern FB uses a[href*="/user/"][aria-hidden="false"] for the name link.
+        # inner_text() returns the visible name directly.
+        author = await _get_text(post_el, 'a[href*="/user/"][aria-hidden="false"]')
 
-        # Author name — try a cascade of selectors; modern FB often uses h2 > span > a
-        author = ""
-        for author_sel in [
-            'h2 a',
-            'h3 a',
-            '[data-testid="post_author"] a',
-            'strong a',
-            'strong',
-            'h2 span',
-        ]:
-            author = await _get_text(post_el, author_sel)
-            if author and len(author) < 100:  # Skip if it grabbed too much text
-                break
-
-        # Find the timestamp link — its inner text is a relative-time string ("31m", "2h", …).
-        # Using query_selector_all + filter avoids picking up post-body links whose visible
-        # text is a full URL or long sentence.
+        # Timestamp link — must have relative-time text AND must NOT be a comment link
+        # (comment links contain "comment_id" in the href).
         post_url = ""
         date_text = ""
         for sel in ['a[href*="/posts/"]', 'a[href*="story_fbid"]', 'a[href*="/permalink/"]']:
             links = await post_el.query_selector_all(sel)
             for link in links:
+                href = (await link.get_attribute("href")) or ""
+                if "comment_id" in href:
+                    continue
                 txt = (await link.inner_text()).strip()
                 if _RELATIVE_TIME_RE.match(txt):
-                    href = (await link.get_attribute("href")) or ""
                     if href.startswith("/"):
                         href = "https://www.facebook.com" + href
                     post_url = href.split("?")[0]
@@ -89,17 +68,20 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
             if post_url:
                 break
 
-        # Fallback: take first matching link even without a recognised time string
+        # Fallback: first post link regardless of time text
         if not post_url:
-            link = await post_el.query_selector(
+            links = await post_el.query_selector_all(
                 'a[href*="/posts/"], a[href*="story_fbid"], a[href*="/permalink/"]'
             )
-            if link:
+            for link in links:
                 href = (await link.get_attribute("href")) or ""
+                if "comment_id" in href:
+                    continue
                 if href.startswith("/"):
                     href = "https://www.facebook.com" + href
                 post_url = href.split("?")[0]
                 date_text = (await link.inner_text()).strip()
+                break
 
         post_id = extract_post_id(post_url) if post_url else ""
 
@@ -115,33 +97,11 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
         except Exception:
             pass
 
-        # Post text content — try specific data attributes, then longest div[dir="auto"] block
-        text = ""
-        for selector in [
-            '[data-ad-comet-preview="message"]',
-            '[data-testid="post_message"]',
-            '[data-ad-preview="message"]',
-        ]:
-            text = await _get_text(post_el, selector)
-            if text:
-                break
+        # Post text: span[dir="auto"][lang] wraps the entire post body including all paragraphs.
+        # This is far more specific than div[dir="auto"] which appears all over the page.
+        text = await _get_text(post_el, 'span[dir="auto"][lang]')
 
-        if not text:
-            try:
-                nodes = await post_el.query_selector_all('div[dir="auto"]')
-                candidates = []
-                for n in nodes:
-                    t = (await n.inner_text()).strip()
-                    if len(t) > 10:
-                        candidates.append(t)
-                if candidates:
-                    text = max(candidates, key=len)
-            except Exception:
-                pass
-
-        # Image URLs — check both src and data-src (lazy-loaded images).
-        # Only keep scontent*.fbcdn.net URLs — these are actual user-uploaded images.
-        # static.xx.fbcdn.net/rsrc.php/... are UI icons and must be excluded.
+        # Image URLs — scontent*.fbcdn.net are user-uploaded images; static.xx.fbcdn.net are icons.
         image_urls: List[str] = []
         img_tags = await post_el.query_selector_all("img")
         for img in img_tags:
@@ -151,7 +111,7 @@ async def parse_post(post_el: ElementHandle, page: Page) -> Post | None:
             if src and "scontent" in src and "fbcdn.net" in src and "emoji" not in src.lower():
                 image_urls.append(src)
 
-        # Video URLs — look for video source or data-video-id
+        # Video URLs
         video_urls: List[str] = []
         video_els = await post_el.query_selector_all("video[src], [data-video-id]")
         for v in video_els:
